@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	_ "fmt"
 	"io"
 	"log"
 	"sync"
@@ -25,24 +24,25 @@ func NewChatServer() *ChatServer {
 	}
 }
 
-// Unary (buat test di Postman)
+// Unary RPC (Postman / NestJS)
 func (s *ChatServer) SendMessage(_ context.Context, msg *pb.ChatMessage) (*pb.SendMessageResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	msg.Timestamp = time.Now().Unix()
+
 	log.Printf("[%s] %s: %s", msg.RoomId, msg.Sender, msg.Content)
+
+	// ✅ Broadcast ke semua stream aktif
+	s.broadcast(msg)
+
 	return &pb.SendMessageResponse{
 		Success: true,
-		Message: "Message received successfully!",
+		Message: "Message broadcasted successfully!",
 	}, nil
 }
 
-// Streaming (bidirectional)
+// Streaming RPC (Bidirectional)
 func (s *ChatServer) StreamChat(stream pb.ChatService_StreamChatServer) error {
 	clientID := fmt.Sprintf("%p", stream)
 
-	// simpan stream client
 	s.mu.Lock()
 	s.clients[clientID] = stream
 	s.mu.Unlock()
@@ -68,26 +68,20 @@ func (s *ChatServer) StreamChat(stream pb.ChatService_StreamChatServer) error {
 
 		msg.Timestamp = time.Now().Unix()
 
-		// broadcast ke semua stream lain
-		s.mu.Lock()
-		for id, sstream := range s.clients {
-			if id != clientID {
-				_ = sstream.Send(msg)
-			}
-		}
-		s.mu.Unlock()
+		log.Printf("[%s] %s: %s", msg.RoomId, msg.Sender, msg.Content)
+
+		// ✅ Broadcast ke semua stream aktif (termasuk dari stream client lain)
+		s.broadcast(msg)
 	}
 }
 
+// Utility untuk broadcast ke semua client stream aktif
 func (s *ChatServer) broadcast(msg *pb.ChatMessage) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for id, client := range s.clients {
-		if id == msg.Sender {
-			continue // jangan kirim balik ke pengirim
-		}
-
+		// kirim ke semua stream
 		if err := client.Send(msg); err != nil {
 			log.Printf("⚠️ Error kirim ke %s: %v", id, err)
 		}
